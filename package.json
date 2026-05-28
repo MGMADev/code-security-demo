@@ -1,0 +1,33 @@
+{
+  "name": "ghas-security-demo",
+  "version": "1.0.0",
+  "description": "Demo app with intentional security issues for GitHub Advanced Security showcase",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "test": "jest --coverage --coverageReporters=lcov --coverageReporters=text"
+  },
+  "dependencies": {
+    "express": "4.17.1",
+    "jsonwebtoken": "8.5.1",
+    "lodash": "4.17.4",
+    "sqlite3": "5.0.2",
+    "md5": "2.3.0",
+    "axios": "0.21.1"
+  },
+  "devDependencies": {
+    "jest": "^29.0.0",
+    "supertest": "^6.3.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "collectCoverageFrom": [
+      "src/**/*.js"
+    ],
+    "coverageThreshold": {
+      "global": {
+        "lines": 50
+      }
+    }
+  }
+}

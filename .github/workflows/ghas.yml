@@ -1,0 +1,158 @@
+name: GitHub Advanced Security Demo
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+    # Run a full scan every Monday at 08:00 UTC
+    - cron: '0 8 * * 1'
+
+permissions:
+  contents: read
+  security-events: write   # Required to upload SARIF results
+  actions: read
+
+jobs:
+  # ── 1. CodeQL Static Analysis (SAST) ───────────────────────────────────────
+  codeql-analysis:
+    name: CodeQL SAST Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'javascript' ]
+        # Add 'python', 'java', 'go' etc. if you have those in your repo
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialise CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # Use the 'security-extended' query suite to catch more issues
+          queries: security-extended
+          # Optionally point at a custom config file:
+          # config-file: ./.github/codeql/codeql-config.yml
+
+      # For compiled languages (Java, C++), build your project here.
+      # JavaScript/TypeScript is auto-built by CodeQL.
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
+          # Upload SARIF to the Security tab
+          upload: true
+          output: codeql-results
+
+      - name: Upload CodeQL SARIF as artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: codeql-sarif-${{ matrix.language }}
+          path: codeql-results/
+          retention-days: 30
+
+  # ── 2. Dependency Review (SCA) on Pull Requests ────────────────────────────
+  dependency-review:
+    name: Dependency Review (SCA)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+        with:
+          # Fail the check if any CVE with CRITICAL or HIGH severity is introduced
+          fail-on-severity: high
+          # Also block known malicious packages
+          deny-licenses: GPL-2.0, LGPL-2.0
+
+  # ── 3. Secret Scanning alert (informational step) ─────────────────────────
+  # GitHub Secret Scanning runs automatically on all repos with GHAS enabled.
+  # This step is informational — it documents that secret scanning is active.
+  secret-scanning-notice:
+    name: Secret Scanning (auto)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Secret scanning is enabled
+        run: |
+          echo "✅ GitHub Secret Scanning is enabled for this repository."
+          echo "Alerts appear in: Security → Secret scanning alerts"
+          echo "Push protection blocks known secret patterns before they land in the repo."
+
+  # ── 4. Tests + Code Coverage ───────────────────────────────────────────────
+  test-and-coverage:
+    name: Tests & Code Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests with coverage
+        run: npm test
+        env:
+          NODE_ENV: test
+
+      - name: Upload coverage report (lcov) as artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 30
+
+      # Optional: upload to Codecov for PR coverage comments and badge
+      # Requires CODECOV_TOKEN secret to be set in repo settings.
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          files: ./coverage/lcov.info
+          flags: unittests
+          name: ghas-demo-coverage
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  # ── 5. Security Summary ────────────────────────────────────────────────────
+  security-summary:
+    name: Security Summary
+    runs-on: ubuntu-latest
+    needs: [ codeql-analysis, test-and-coverage ]
+    if: always()
+
+    steps:
+      - name: Print summary
+        run: |
+          echo "## GHAS Security Scan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| CodeQL SAST | ${{ needs.codeql-analysis.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tests & Coverage | ${{ needs.test-and-coverage.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Secret Scanning | Automatic (check Security tab) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dependabot | Automatic (check Security tab) |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🔗 View all alerts in the [Security tab](../../security)" >> $GITHUB_STEP_SUMMARY

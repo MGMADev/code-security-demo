@@ -1,0 +1,25 @@
+version: 2
+
+updates:
+  # npm ecosystem — scans package.json and flags outdated/vulnerable packages
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+    # Group all non-security updates into a single PR to reduce noise
+    groups:
+      non-security-updates:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
+    # Security updates always get their own PR so they're easy to review
+    open-pull-requests-limit: 10
+
+  # GitHub Actions — keep workflow action versions up to date
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
