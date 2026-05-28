@@ -126,7 +126,7 @@ jobs:
       # Optional: upload to Codecov for PR coverage comments and badge
       # Requires CODECOV_TOKEN secret to be set in repo settings.
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v6
         if: always()
         with:
           files: ./coverage/lcov.info
