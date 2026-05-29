@@ -6,7 +6,6 @@ on:
   pull_request:
     branches: [ "main" ]
   schedule:
-    # Run a full scan every Monday at 08:00 UTC
     - cron: '0 8 * * 1'
   workflow_dispatch:
 
