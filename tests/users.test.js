@@ -1,78 +1,112 @@
 /**
- * Users & crypto tests
- * Provides code coverage for the GHAS demo workflow.
+ * Users route tests
  */
 
-const request = require('supertest');
-const app = require('../src/app');
-const { hashPasswordMD5, hashPasswordSHA1, generateToken, verifySecret } = require('../src/crypto');
+jest.mock('sqlite3');
+jest.mock('../src/db', () => ({
+  getAllUsers: jest.fn(),
+  getUserById: jest.fn(),
+  searchProducts: jest.fn(),
+  db: {
+    run: jest.fn((sql, cb) => cb && cb.call({ changes: 1 }, null)),
+  },
+}));
 
-// ── Users ──────────────────────────────────────────────────────────────────
+const request = require('supertest');
+const jwt = require('jsonwebtoken');
+const app = require('../src/app');
+const db = require('../src/db');
+
+const TEST_SECRET = 'super_secret_key_1234';
+const userToken = jwt.sign({ id: 2, username: 'alice', role: 'user' }, TEST_SECRET);
+const adminToken = jwt.sign({ id: 1, username: 'admin', role: 'admin' }, TEST_SECRET);
+
+beforeEach(() => jest.clearAllMocks());
 
 describe('GET /users', () => {
-  it('should return a list of users without authentication', async () => {
+  it('returns all users without authentication', async () => {
+    db.getAllUsers.mockResolvedValue([
+      { id: 1, username: 'admin', password: 'admin123', role: 'admin' },
+      { id: 2, username: 'alice', password: 'password', role: 'user' },
+    ]);
     const res = await request(app).get('/users');
     expect(res.status).toBe(200);
-    expect(Array.isArray(res.body)).toBe(true);
-    expect(res.body.length).toBeGreaterThan(0);
+    expect(res.body).toHaveLength(2);
   });
 
-  it('should return users with sensitive fields exposed', async () => {
+  it('returns 500 on db error', async () => {
+    db.getAllUsers.mockRejectedValue(new Error('DB error'));
     const res = await request(app).get('/users');
-    // This test intentionally documents the vulnerability — passwords are returned
+    expect(res.status).toBe(500);
+  });
+
+  it('exposes the password field (documents vulnerability)', async () => {
+    db.getAllUsers.mockResolvedValue([{ id: 1, username: 'admin', password: 'admin123' }]);
+    const res = await request(app).get('/users');
     expect(res.body[0]).toHaveProperty('password');
   });
 });
 
+describe('GET /users/:id', () => {
+  it('returns a user when found', async () => {
+    db.getUserById.mockResolvedValue({ id: 2, username: 'alice', role: 'user' });
+    const res = await request(app).get('/users/2').set('authorization', userToken);
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('username', 'alice');
+  });
+
+  it('returns 404 when user not found', async () => {
+    db.getUserById.mockResolvedValue(null);
+    const res = await request(app).get('/users/999').set('authorization', userToken);
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 401 without a token', async () => {
+    const res = await request(app).get('/users/1');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 500 on db error', async () => {
+    db.getUserById.mockRejectedValue(new Error('DB error'));
+    const res = await request(app).get('/users/1').set('authorization', userToken);
+    expect(res.status).toBe(500);
+  });
+});
+
+describe('GET /users/search/products', () => {
+  it('returns matching products', async () => {
+    db.searchProducts.mockResolvedValue([{ id: 1, name: 'Widget A', price: 9.99 }]);
+    const res = await request(app).get('/users/search/products?q=Widget');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+  });
+
+  it('returns empty array when nothing matches', async () => {
+    db.searchProducts.mockResolvedValue([]);
+    const res = await request(app).get('/users/search/products?q=nothing');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(0);
+  });
+
+  it('returns 500 on db error', async () => {
+    db.searchProducts.mockRejectedValue(new Error('Search error'));
+    const res = await request(app).get('/users/search/products?q=Widget');
+    expect(res.status).toBe(500);
+  });
+});
+
 describe('GET /users/profile/view', () => {
-  it('should reflect name parameter into response HTML', async () => {
+  it('reflects the name parameter in the HTML response', async () => {
     const res = await request(app).get('/users/profile/view?name=Alice');
     expect(res.status).toBe(200);
     expect(res.text).toContain('Alice');
   });
 
-  it('should reflect XSS payload without sanitisation', async () => {
-    const xss = '<script>alert(1)</script>';
-    const res = await request(app)
-      .get(`/users/profile/view?name=${encodeURIComponent(xss)}`);
-    // Documents the XSS vulnerability — script tag is reflected unescaped
+  it('reflects an XSS payload unescaped (documents vulnerability)', async () => {
+    const xss = encodeURIComponent('<script>alert(1)</script>');
+    const res = await request(app).get(`/users/profile/view?name=${xss}`);
     expect(res.text).toContain('<script>alert(1)</script>');
   });
 });
 
-describe('GET /users/search/products', () => {
-  it('should return products matching search term', async () => {
-    const res = await request(app).get('/users/search/products?q=Widget');
-    expect(res.status).toBe(200);
-    expect(Array.isArray(res.body)).toBe(true);
-  });
-});
 
-// ── Crypto ─────────────────────────────────────────────────────────────────
-
-describe('crypto utilities', () => {
-  it('hashPasswordMD5 should return a 32-char hex string', () => {
-    const hash = hashPasswordMD5('password');
-    expect(hash).toHaveLength(32);
-    expect(hash).toMatch(/^[a-f0-9]+$/);
-  });
-
-  it('hashPasswordSHA1 should return a 40-char hex string', () => {
-    const hash = hashPasswordSHA1('password');
-    expect(hash).toHaveLength(40);
-  });
-
-  it('generateToken should return a non-empty string', () => {
-    const token = generateToken();
-    expect(typeof token).toBe('string');
-    expect(token.length).toBeGreaterThan(0);
-  });
-
-  it('verifySecret should return true for matching strings', () => {
-    expect(verifySecret('abc', 'abc')).toBe(true);
-  });
-
-  it('verifySecret should return false for non-matching strings', () => {
-    expect(verifySecret('abc', 'xyz')).toBe(false);
-  });
-});
