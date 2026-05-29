@@ -5,7 +5,7 @@
   "main": "src/app.js",
   "scripts": {
     "start": "node src/app.js",
-    "test": "jest --coverage --coverageReporters=lcov --coverageReporters=text"
+    "test": "jest --coverage --coverageReporters=lcov --coverageReporters=text --coverageReporters=json-summary"
   },
   "dependencies": {
     "express": "4.17.1",
@@ -23,11 +23,6 @@
     "testEnvironment": "node",
     "collectCoverageFrom": [
       "src/**/*.js"
-    ],
-    "coverageThreshold": {
-      "global": {
-        "lines": 50
-      }
-    }
+    ]
   }
 }

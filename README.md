@@ -1,5 +1,8 @@
 # GHAS Security Demo
 
+[![GitHub Advanced Security](https://img.shields.io/badge/GHAS-enabled-brightgreen?logo=github)](https://docs.github.com/en/get-started/learning-about-github/about-github-advanced-security)
+[![CodeQL](https://github.com/MGMADev/code-security-demo/actions/workflows/ghas.yml/badge.svg)](https://github.com/MGMADev/code-security-demo/actions/workflows/ghas.yml)
+
 A Node.js/Express application intentionally built with security vulnerabilities to demonstrate [GitHub Advanced Security (GHAS)](https://docs.github.com/en/get-started/learning-about-github/about-github-advanced-security).
 
 > ⚠️ **This code is deliberately insecure. Never use any of these patterns in production.**

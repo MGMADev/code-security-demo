@@ -8,11 +8,13 @@ on:
   schedule:
     # Run a full scan every Monday at 08:00 UTC
     - cron: '0 8 * * 1'
+  workflow_dispatch:
 
 permissions:
   contents: read
   security-events: write   # Required to upload SARIF results
   actions: read
+  pull-requests: write     # Required to post PR coverage comments
 
 jobs:
   # ── 1. CodeQL Static Analysis (SAST) ───────────────────────────────────────
@@ -25,7 +27,6 @@ jobs:
       fail-fast: false
       matrix:
         language: [ 'javascript' ]
-        # Add 'python', 'java', 'go' etc. if you have those in your repo
 
     steps:
       - name: Checkout repository
@@ -35,13 +36,8 @@ jobs:
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
-          # Use the 'security-extended' query suite to catch more issues
           queries: security-extended
-          # Optionally point at a custom config file:
-          # config-file: ./.github/codeql/codeql-config.yml
 
-      # For compiled languages (Java, C++), build your project here.
-      # JavaScript/TypeScript is auto-built by CodeQL.
       - name: Autobuild
         uses: github/codeql-action/autobuild@v3
 
@@ -49,7 +45,6 @@ jobs:
         uses: github/codeql-action/analyze@v3
         with:
           category: "/language:${{ matrix.language }}"
-          # Upload SARIF to the Security tab
           upload: true
           output: codeql-results
 
@@ -65,7 +60,7 @@ jobs:
   dependency-review:
     name: Dependency Review (SCA)
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
 
     steps:
       - name: Checkout repository
@@ -74,14 +69,10 @@ jobs:
       - name: Dependency Review
         uses: actions/dependency-review-action@v4
         with:
-          # Fail the check if any CVE with CRITICAL or HIGH severity is introduced
           fail-on-severity: high
-          # Also block known malicious packages
           deny-licenses: GPL-2.0, LGPL-2.0
 
-  # ── 3. Secret Scanning alert (informational step) ─────────────────────────
-  # GitHub Secret Scanning runs automatically on all repos with GHAS enabled.
-  # This step is informational — it documents that secret scanning is active.
+  # ── 3. Secret Scanning (informational) ────────────────────────────────────
   secret-scanning-notice:
     name: Secret Scanning (auto)
     runs-on: ubuntu-latest
@@ -115,7 +106,7 @@ jobs:
         env:
           NODE_ENV: test
 
-      - name: Upload coverage report (lcov) as artifact
+      - name: Upload coverage report as artifact
         uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -123,18 +114,104 @@ jobs:
           path: coverage/
           retention-days: 30
 
-      # Optional: upload to Codecov for PR coverage comments and badge
-      # Requires CODECOV_TOKEN secret to be set in repo settings.
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+      # Write a coverage summary table to the Actions run summary page
+      - name: Write coverage summary
         if: always()
+        run: |
+          SUMMARY="coverage/coverage-summary.json"
+          if [ ! -f "$SUMMARY" ]; then
+            echo "No coverage summary found." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          echo "## 📊 Unit Test Coverage" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| File | Statements | Branches | Functions | Lines |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-----------|----------|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+
+          node -e "
+            const data = require('./coverage/coverage-summary.json');
+            const files = Object.keys(data).filter(k => k !== 'total');
+            files.forEach(f => {
+              const d = data[f];
+              const name = f.replace(process.cwd() + '/src/', '');
+              const pct = v => v.pct + '%';
+              console.log('| ' + name + ' | ' + pct(d.statements) + ' | ' + pct(d.branches) + ' | ' + pct(d.functions) + ' | ' + pct(d.lines) + ' |');
+            });
+            const t = data.total;
+            const pct = v => v.pct + '%';
+            console.log('| **Total** | **' + pct(t.statements) + '** | **' + pct(t.branches) + '** | **' + pct(t.functions) + '** | **' + pct(t.lines) + '** |');
+          " >> $GITHUB_STEP_SUMMARY
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Warn if total line coverage is below 60%
+          LINES=$(node -e "const d = require('./coverage/coverage-summary.json'); console.log(d.total.lines.pct);")
+          if (( $(echo "$LINES < 60" | bc -l) )); then
+            echo "⚠️ **Coverage warning:** Line coverage is ${LINES}% — below the 60% target." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ **Coverage:** Line coverage is ${LINES}% — meets the 60% target." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # Post coverage as a comment on pull requests
+      - name: Post coverage comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
         with:
-          files: ./coverage/lcov.info
-          flags: unittests
-          name: ghas-demo-coverage
-          fail_ci_if_error: false
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const summaryPath = 'coverage/coverage-summary.json';
+
+            if (!fs.existsSync(summaryPath)) {
+              console.log('No coverage summary found, skipping PR comment.');
+              return;
+            }
+
+            const data = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
+            const total = data.total;
+            const pct = v => `${v.pct}%`;
+
+            const status = total.lines.pct >= 60 ? '✅' : '⚠️';
+
+            let table = `## ${status} Unit Test Coverage Report\n\n`;
+            table += `| File | Statements | Branches | Functions | Lines |\n`;
+            table += `|------|-----------|----------|-----------|-------|\n`;
+
+            Object.keys(data)
+              .filter(k => k !== 'total')
+              .forEach(file => {
+                const d = data[file];
+                const name = file.replace(process.cwd() + '/src/', '');
+                table += `| \`${name}\` | ${pct(d.statements)} | ${pct(d.branches)} | ${pct(d.functions)} | ${pct(d.lines)} |\n`;
+              });
+
+            table += `| **Total** | **${pct(total.statements)}** | **${pct(total.branches)}** | **${pct(total.functions)}** | **${pct(total.lines)}** |\n`;
+            table += `\n> Target: 60% line coverage`;
+
+            // Find and update existing comment, or create a new one
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c => c.body.includes('Unit Test Coverage Report'));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: table,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: table,
+              });
+            }
 
   # ── 5. Security Summary ────────────────────────────────────────────────────
   security-summary:
